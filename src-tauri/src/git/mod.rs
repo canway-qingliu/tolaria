@@ -22,13 +22,13 @@ pub use conflict::{
     get_conflict_files, get_conflict_mode, git_commit_conflict_resolution, git_resolve_conflict,
     is_merge_in_progress, is_rebase_in_progress,
 };
-pub use connect::{disconnect_all_remotes, git_add_remote, GitAddRemoteResult};
+pub use connect::{disconnect_all_remotes, git_add_remote, git_add_remote_named, git_remove_remote, GitAddRemoteResult};
 pub use dates::{get_all_file_dates, GitDates};
 pub use history::{get_file_diff, get_file_diff_at_commit, get_file_history};
 pub use pulse::{get_last_commit_info, get_vault_pulse, LastCommitInfo, PulseCommit, PulseFile};
 pub use remote::{
-    git_pull, git_push, git_remote_status, has_remote, GitPullResult, GitPushResult,
-    GitRemoteStatus,
+    git_list_remotes, git_pull, git_pull_remote, git_push, git_push_remote, git_remote_status,
+    has_remote, GitPullResult, GitPushResult, GitRemoteStatus, RemoteInfo,
 };
 pub use status::{
     discard_file_changes, get_modified_files, get_modified_files_with_stats, ModifiedFile,

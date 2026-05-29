@@ -165,6 +165,7 @@ export interface GitRemoteStatus {
   ahead: number
   behind: number
   hasRemote: boolean
+  remotes: { name: string; ahead: number; behind: number }[]
 }
 
 export interface SearchResult {

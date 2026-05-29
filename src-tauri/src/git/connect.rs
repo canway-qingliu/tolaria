@@ -7,9 +7,7 @@ use super::command::{
 };
 use super::credentials::request_remote_credentials;
 use super::ensure_author_config;
-use super::remote_config::{configure_origin_remote, list_configured_remotes};
-
-const DEFAULT_REMOTE_NAME: &str = "origin";
+use super::remote_config::{configure_remote, list_configured_remotes};
 
 #[derive(Clone, Copy)]
 enum ConnectStatus {
@@ -42,14 +40,16 @@ pub struct GitAddRemoteResult {
 
 struct RemoteConnection {
     branch: String,
+    remote_name: String,
     remote_branch: String,
 }
 
 impl RemoteConnection {
-    fn new(branch: String) -> Self {
-        let remote_branch = format!("{DEFAULT_REMOTE_NAME}/{branch}");
+    fn new(branch: String, remote_name: String) -> Self {
+        let remote_branch = format!("{remote_name}/{branch}");
         Self {
             branch,
+            remote_name,
             remote_branch,
         }
     }
@@ -81,6 +81,14 @@ pub fn disconnect_all_remotes(vault_path: &str) -> Result<(), String> {
 }
 
 pub fn git_add_remote(vault_path: &str, remote_url: &str) -> Result<GitAddRemoteResult, String> {
+    git_add_remote_named(vault_path, "origin", remote_url)
+}
+
+pub fn git_add_remote_named(
+    vault_path: &str,
+    remote_name: &str,
+    remote_url: &str,
+) -> Result<GitAddRemoteResult, String> {
     let vault = Path::new(vault_path);
 
     if remote_url.trim().is_empty() {
@@ -90,10 +98,19 @@ pub fn git_add_remote(vault_path: &str, remote_url: &str) -> Result<GitAddRemote
         ));
     }
 
-    if !list_remotes(vault)?.is_empty() {
+    if remote_name.trim().is_empty() {
+        return Ok(connect_result(
+            ConnectStatus::Error,
+            "Enter a remote name before connecting a remote.",
+        ));
+    }
+
+    // Check if this specific remote already exists
+    let existing = list_remotes(vault)?;
+    if existing.contains(&remote_name.to_string()) {
         return Ok(connect_result(
             ConnectStatus::AlreadyConfigured,
-            "This vault already has a remote configured.",
+            format!("A remote named '{}' already exists.", remote_name),
         ));
     }
 
@@ -106,26 +123,32 @@ pub fn git_add_remote(vault_path: &str, remote_url: &str) -> Result<GitAddRemote
             "Tolaria could not determine the current branch for this vault.",
         ));
     }
-    let connection = RemoteConnection::new(branch);
+    let connection = RemoteConnection::new(branch, remote_name.to_string());
 
     let trimmed_url = remote_url.trim();
-    configure_origin_remote(vault, trimmed_url)?;
+    configure_remote(vault, remote_name, trimmed_url)?;
     request_remote_credentials(vault, trimmed_url);
 
     let result = finish_remote_connection(vault, &connection);
     if result.status != "connected" {
-        let _ = disconnect_all_remotes(vault_path);
+        let _ = run_git(vault, &["remote", "remove", remote_name]);
     }
 
     Ok(result)
 }
 
+/// Remove a specific remote by name.
+pub fn git_remove_remote(vault_path: &str, remote_name: &str) -> Result<(), String> {
+    let vault = Path::new(vault_path);
+    run_git(vault, &["remote", "remove", remote_name])
+}
+
 fn finish_remote_connection(vault: &Path, connection: &RemoteConnection) -> GitAddRemoteResult {
-    if let Err(stderr) = fetch_remote(vault) {
+    if let Err(stderr) = fetch_remote(vault, &connection.remote_name) {
         return classify_connect_error(&stderr);
     }
 
-    let remote_branches = match list_remote_branches(vault) {
+    let remote_branches = match list_remote_branches(vault, &connection.remote_name) {
         Ok(branches) => branches,
         Err(err) => return connect_result(ConnectStatus::Error, err),
     };
@@ -197,17 +220,17 @@ fn unset_upstream(vault: &Path) {
     let _ = git_output(vault, &["branch", "--unset-upstream"]);
 }
 
-fn fetch_remote(vault: &Path) -> Result<(), String> {
-    run_git(vault, &["fetch", DEFAULT_REMOTE_NAME, "--prune"])
+fn fetch_remote(vault: &Path, remote_name: &str) -> Result<(), String> {
+    run_git(vault, &["fetch", remote_name, "--prune"])
 }
 
-fn list_remote_branches(vault: &Path) -> Result<Vec<String>, String> {
+fn list_remote_branches(vault: &Path, remote_name: &str) -> Result<Vec<String>, String> {
     let output = git_output_result(
         vault,
         &[
             "for-each-ref",
             "--format=%(refname:short)",
-            "refs/remotes/origin",
+            &format!("refs/remotes/{remote_name}"),
         ],
     )?;
 
@@ -217,7 +240,7 @@ fn list_remote_branches(vault: &Path) -> Result<Vec<String>, String> {
 
     Ok(stdout_lines(&output)
         .into_iter()
-        .filter(|line| line != "origin/HEAD")
+        .filter(|line| line != &format!("{remote_name}/HEAD"))
         .collect())
 }
 
@@ -264,7 +287,7 @@ fn push_with_tracking(
         &[
             "push",
             "-u",
-            DEFAULT_REMOTE_NAME,
+            &connection.remote_name,
             connection.branch.as_str(),
         ],
     ) {

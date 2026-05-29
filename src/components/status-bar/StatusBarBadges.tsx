@@ -221,20 +221,6 @@ function CompactStatusActionBadge({
   )
 }
 
-type RemoteSummaryState =
-  | { kind: 'missing' }
-  | { kind: 'inSync' }
-  | { kind: 'diverged'; ahead: number; behind: number }
-
-function getRemoteSummaryState(remoteStatus: GitRemoteStatus | null): RemoteSummaryState {
-  if (!hasRemote(remoteStatus)) return { kind: 'missing' }
-
-  const ahead = remoteStatus?.ahead ?? 0
-  const behind = remoteStatus?.behind ?? 0
-  return ahead === 0 && behind === 0
-    ? { kind: 'inSync' }
-    : { kind: 'diverged', ahead, behind }
-}
 
 function RemoteSummaryLine({ children }: { children: ReactNode }) {
   return (
@@ -383,21 +369,47 @@ function StatusWarningBadge(props: StatusWarningBadgeProps) {
 }
 
 function RemoteStatusSummary({ remoteStatus, locale = 'en' }: { remoteStatus: GitRemoteStatus | null; locale?: AppLocale }) {
-  const state = getRemoteSummaryState(remoteStatus)
+  const remotes = remoteStatus?.remotes ?? []
 
-  if (state.kind === 'missing') {
+  if (!hasRemote(remoteStatus) || remotes.length === 0) {
     return <div style={{ color: 'var(--muted-foreground)', marginBottom: 6 }}>{translate(locale, 'status.remote.noneConfigured')}</div>
   }
 
-  if (state.kind === 'inSync') {
-    return <RemoteSummaryLine>{translate(locale, 'status.remote.inSync')}</RemoteSummaryLine>
+  if (remotes.length === 1) {
+    const r = remotes[0]
+    const state = r.ahead === 0 && r.behind === 0
+      ? 'inSync'
+      : 'diverged'
+    if (state === 'inSync') {
+      return <RemoteSummaryLine>{translate(locale, 'status.remote.inSync')}</RemoteSummaryLine>
+    }
+    return (
+      <RemoteSummaryLine>
+        <RemoteDivergenceItem count={r.ahead} direction="ahead" locale={locale} />
+        <RemoteDivergenceItem count={r.behind} direction="behind" locale={locale} />
+      </RemoteSummaryLine>
+    )
   }
 
   return (
-    <RemoteSummaryLine>
-      <RemoteDivergenceItem count={state.ahead} direction="ahead" locale={locale} />
-      <RemoteDivergenceItem count={state.behind} direction="behind" locale={locale} />
-    </RemoteSummaryLine>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 6 }}>
+      {remotes.map((r) => {
+        const inSync = r.ahead === 0 && r.behind === 0
+        return (
+          <div key={r.name} style={{ display: 'flex', gap: 8, alignItems: 'center', color: 'var(--muted-foreground)', fontSize: 11 }}>
+            <span style={{ fontWeight: 500, color: 'var(--foreground)' }}>{r.name}</span>
+            {inSync
+              ? <span style={{ color: 'var(--accent-green)' }}>{translate(locale, 'status.remote.inSync')}</span>
+              : (
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <RemoteDivergenceItem count={r.ahead} direction="ahead" locale={locale} />
+                  <RemoteDivergenceItem count={r.behind} direction="behind" locale={locale} />
+                </div>
+              )}
+          </div>
+        )
+      })}
+    </div>
   )
 }
 
@@ -414,21 +426,42 @@ function PullAction({
 }) {
   if (!hasRemote(remoteStatus)) return null
 
+  const remotes = remoteStatus?.remotes ?? []
+
   return (
-    <div style={{ display: 'flex', gap: 4, marginTop: 6, borderTop: '1px solid var(--border)', paddingTop: 6 }}>
-      <Button
-        type="button"
-        variant="outline"
-        size="xs"
-        onClick={() => {
-          onPull?.()
-          onClose()
-        }}
-        className="h-6 gap-1 rounded-sm border-border bg-transparent px-2 text-[11px] text-foreground hover:bg-[var(--hover)]"
-        data-testid="git-status-pull-btn"
-      >
-        <ArrowDown size={11} />{translate(locale, 'status.sync.pull')}
-      </Button>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6, borderTop: '1px solid var(--border)', paddingTop: 6 }}>
+      {remotes.length <= 1 ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="xs"
+          onClick={() => {
+            onPull?.()
+            onClose()
+          }}
+          className="h-6 gap-1 rounded-sm border-border bg-transparent px-2 text-[11px] text-foreground hover:bg-[var(--hover)]"
+          data-testid="git-status-pull-btn"
+        >
+          <ArrowDown size={11} />{translate(locale, 'status.sync.pull')}
+        </Button>
+      ) : (
+        remotes.map((r) => (
+          <Button
+            key={r.name}
+            type="button"
+            variant="outline"
+            size="xs"
+            onClick={() => {
+              onPull?.()
+              onClose()
+            }}
+            className="h-6 gap-1 rounded-sm border-border bg-transparent px-2 text-[11px] text-foreground hover:bg-[var(--hover)]"
+            data-testid={`git-status-pull-btn-${r.name}`}
+          >
+            <ArrowDown size={11} />{translate(locale, 'status.sync.pull')} {r.name}
+          </Button>
+        ))
+      )}
     </div>
   )
 }

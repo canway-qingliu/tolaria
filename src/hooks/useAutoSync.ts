@@ -112,6 +112,7 @@ function aggregateRemoteStatuses(statuses: GitRemoteStatus[]): GitRemoteStatus |
     ahead: statuses.reduce((sum, status) => sum + (status.ahead ?? 0), 0),
     behind: statuses.reduce((sum, status) => sum + (status.behind ?? 0), 0),
     hasRemote: statuses.some((status) => status.hasRemote === true),
+    remotes: statuses.flatMap((status) => status.remotes ?? []),
   }
 }
 

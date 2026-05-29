@@ -152,6 +152,39 @@ pub async fn git_remote_status(vault_path: VaultPathArg) -> Result<GitRemoteStat
 
 #[cfg(desktop)]
 #[tauri::command]
+pub async fn git_list_remotes(vault_path: VaultPathArg) -> Result<Vec<String>, String> {
+    let vault_path = expand_tilde(&vault_path).into_owned();
+    tokio::task::spawn_blocking(move || crate::git::git_list_remotes(&vault_path))
+        .await
+        .map_err(|e| format!("Task panicked: {e}"))?
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn git_pull_remote(
+    vault_path: VaultPathArg,
+    remote_name: String,
+) -> Result<GitPullResult, String> {
+    let vault_path = expand_tilde(&vault_path).into_owned();
+    tokio::task::spawn_blocking(move || crate::git::git_pull_remote(&vault_path, &remote_name))
+        .await
+        .map_err(|e| format!("Task panicked: {e}"))?
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn git_push_remote(
+    vault_path: VaultPathArg,
+    remote_name: String,
+) -> Result<GitPushResult, String> {
+    let vault_path = expand_tilde(&vault_path).into_owned();
+    tokio::task::spawn_blocking(move || crate::git::git_push_remote(&vault_path, &remote_name))
+        .await
+        .map_err(|e| format!("Task panicked: {e}"))?
+}
+
+#[cfg(desktop)]
+#[tauri::command]
 pub fn git_discard_file(
     vault_path: VaultPathArg,
     relative_path: NotePathArg,
@@ -341,7 +374,32 @@ pub async fn git_remote_status(_vault_path: VaultPathArg) -> Result<GitRemoteSta
         has_remote: false,
         ahead: 0,
         behind: 0,
+        remotes: vec![],
     })
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+pub async fn git_list_remotes(_vault_path: VaultPathArg) -> Result<Vec<String>, String> {
+    Ok(vec![])
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+pub async fn git_pull_remote(
+    _vault_path: VaultPathArg,
+    _remote_name: String,
+) -> Result<GitPullResult, String> {
+    Err("Git pull is not available on mobile".into())
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+pub async fn git_push_remote(
+    _vault_path: VaultPathArg,
+    _remote_name: String,
+) -> Result<GitPushResult, String> {
+    Err("Git push is not available on mobile".into())
 }
 
 #[cfg(mobile)]

@@ -456,9 +456,18 @@ export const mockHandlers: Record<string, (args: any) => any> = {
   init_git_repo: () => null,
   git_pull: (): GitPullResult => ({ status: 'up_to_date', message: 'Already up to date', updatedFiles: [], conflictFiles: [] }),
   git_push: (): GitPushResult => ({ status: 'ok', message: 'Pushed to remote' }),
+  git_pull_remote: (): GitPullResult => ({ status: 'up_to_date', message: 'Already up to date', updatedFiles: [], conflictFiles: [] }),
+  git_push_remote: (): GitPushResult => ({ status: 'ok', message: 'Pushed to remote' }),
   git_remote_status: (args?: { vaultPath?: string; vault_path?: string }): GitRemoteStatus => {
     const vaultPath = args?.vaultPath ?? args?.vault_path ?? mockLastVaultPath ?? DEFAULT_MOCK_VAULT_PATH
-    return { branch: 'main', ahead: 0, behind: 0, hasRemote: getMockRemoteState(vaultPath) }
+    const hasRemote = getMockRemoteState(vaultPath)
+    return {
+      branch: 'main',
+      ahead: 0,
+      behind: 0,
+      hasRemote,
+      remotes: hasRemote ? [{ name: 'origin', ahead: 0, behind: 0 }] : [],
+    }
   },
   git_add_remote: (args?: {
     request?: { vaultPath?: string; vault_path?: string; remoteUrl?: string }
@@ -473,6 +482,27 @@ export const mockHandlers: Record<string, (args: any) => any> = {
       status: 'connected',
       message: 'Remote connected. This vault now tracks origin/main.',
     }
+  },
+  git_list_remotes: (args?: { vaultPath?: string; vault_path?: string }): string[] => {
+    const vaultPath = args?.vaultPath ?? args?.vault_path ?? mockLastVaultPath ?? DEFAULT_MOCK_VAULT_PATH
+    const hasRemote = getMockRemoteState(vaultPath)
+    return hasRemote ? ['origin'] : []
+  },
+  git_add_remote_named: (args?: {
+    vaultPath?: string
+    remoteName?: string
+    remoteUrl?: string
+  }): GitAddRemoteResult => {
+    const vaultPath = args?.vaultPath ?? mockLastVaultPath ?? DEFAULT_MOCK_VAULT_PATH
+    setMockRemoteState(vaultPath, true)
+    return {
+      status: 'connected',
+      message: `Remote "${args?.remoteName ?? 'origin'}" connected.`,
+    }
+  },
+  git_remove_remote: (args?: { vaultPath?: string; vault_path?: string; remoteName?: string }): void => {
+    const vaultPath = args?.vaultPath ?? args?.vault_path ?? mockLastVaultPath ?? DEFAULT_MOCK_VAULT_PATH
+    setMockRemoteState(vaultPath, false)
   },
   get_vault_pulse: (args: { limit?: number }): PulseCommit[] => {
     const limit = args.limit ?? 30

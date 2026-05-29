@@ -3,7 +3,7 @@ use std::path::Path;
 
 use super::command::{git_output, git_output_result, stderr_text, stdout_text};
 use super::conflict::get_conflict_files;
-use super::remote_config::has_configured_remote;
+use super::remote_config::{has_configured_remote, list_configured_remotes};
 
 const NO_REMOTE_STATUS: &str = "no_remote";
 const NO_REMOTE_MESSAGE: &str = "No remote configured";
@@ -106,59 +106,81 @@ fn parse_updated_files(stdout: &str) -> Vec<String> {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct RemoteInfo {
+    pub name: String,
+    pub ahead: u32,
+    pub behind: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct GitRemoteStatus {
     pub branch: String,
     pub ahead: u32,
     pub behind: u32,
     #[serde(rename = "hasRemote")]
     pub has_remote: bool,
+    pub remotes: Vec<RemoteInfo>,
 }
 
 /// Get the current branch name, and how many commits ahead/behind the upstream.
+/// Aggregates across all remotes and also provides per-remote breakdown.
 pub fn git_remote_status(vault_path: &str) -> Result<GitRemoteStatus, String> {
     let vault = Path::new(vault_path);
 
-    if !has_remote(vault_path)? {
-        let branch = current_branch(vault)?;
+    let branch = current_branch(vault)?;
+    let remote_names = list_configured_remotes(vault).unwrap_or_default();
+
+    if remote_names.is_empty() {
         return Ok(GitRemoteStatus {
             branch,
             ahead: 0,
             behind: 0,
             has_remote: false,
+            remotes: vec![],
         });
     }
 
-    // Fetch latest remote refs (silent, best-effort)
-    let _ = git_output(vault, &["fetch", "--quiet"]);
+    // Fetch all remotes silently (best-effort)
+    for name in &remote_names {
+        let _ = git_output(vault, &["fetch", name, "--quiet"]);
+    }
 
-    let branch = current_branch(vault)?;
+    let mut all_ahead = 0u32;
+    let mut all_behind = 0u32;
+    let mut remote_infos = Vec::new();
 
-    let output = git_output_result(
-        vault,
-        &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
-    )?;
-
-    if !output.status.success() {
-        // No upstream set — report 0/0
-        return Ok(GitRemoteStatus {
-            branch,
-            ahead: 0,
-            behind: 0,
-            has_remote: true,
+    for name in &remote_names {
+        let (ahead, behind) = remote_ahead_behind(vault, &branch, name);
+        all_ahead += ahead;
+        all_behind += behind;
+        remote_infos.push(RemoteInfo {
+            name: name.clone(),
+            ahead,
+            behind,
         });
     }
 
+    Ok(GitRemoteStatus {
+        branch,
+        ahead: all_ahead,
+        behind: all_behind,
+        has_remote: true,
+        remotes: remote_infos,
+    })
+}
+
+fn remote_ahead_behind(vault: &Path, branch: &str, remote_name: &str) -> (u32, u32) {
+    let remote_branch = format!("{remote_name}/{branch}");
+    let revision_range = format!("HEAD...{remote_branch}");
+    let output = match git_output_result(vault, &["rev-list", "--left-right", "--count", &revision_range]) {
+        Ok(o) if o.status.success() => o,
+        _ => return (0, 0),
+    };
     let stdout = stdout_text(&output);
     let parts: Vec<&str> = stdout.split('\t').collect();
     let ahead = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
     let behind = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-
-    Ok(GitRemoteStatus {
-        branch,
-        ahead,
-        behind,
-        has_remote: true,
-    })
+    (ahead, behind)
 }
 
 fn current_branch(vault: &Path) -> Result<String, String> {
@@ -306,6 +328,83 @@ pub fn git_push(vault_path: &str) -> Result<GitPushResult, String> {
         status: "ok".to_string(),
         message: "Pushed to remote".to_string(),
     })
+}
+
+/// Pull from a specific remote.
+pub fn git_pull_remote(vault_path: &str, remote_name: &str) -> Result<GitPullResult, String> {
+    let vault = Path::new(vault_path);
+
+    let _ = git_output(vault, &["fetch", remote_name, "--quiet"]);
+
+    let output = git_output(vault, &["pull", "--no-rebase", remote_name])
+        .map_err(|e| format!("Failed to run git pull: {}", e))?;
+
+    let stdout = stdout_text(&output);
+    let stderr = stderr_text(&output);
+
+    if output.status.success() {
+        if stdout.contains("Already up to date") || stdout.contains("Already up-to-date") {
+            return Ok(GitPullResult {
+                status: "up_to_date".to_string(),
+                message: "Already up to date".to_string(),
+                updated_files: vec![],
+                conflict_files: vec![],
+            });
+        }
+        let updated = parse_updated_files(&stdout);
+        return Ok(GitPullResult {
+            status: "updated".to_string(),
+            message: format!("{} file(s) updated", updated.len()),
+            updated_files: updated,
+            conflict_files: vec![],
+        });
+    }
+
+    let conflicts = get_conflict_files(vault_path).unwrap_or_default();
+    if !conflicts.is_empty() {
+        return Ok(GitPullResult {
+            status: "conflict".to_string(),
+            message: format!("Merge conflict in {} file(s)", conflicts.len()),
+            updated_files: vec![],
+            conflict_files: conflicts,
+        });
+    }
+
+    let detail = if stderr.trim().is_empty() {
+        stdout.trim().to_string()
+    } else {
+        stderr.trim().to_string()
+    };
+    Ok(GitPullResult {
+        status: "error".to_string(),
+        message: detail,
+        updated_files: vec![],
+        conflict_files: vec![],
+    })
+}
+
+/// Push to a specific remote.
+pub fn git_push_remote(vault_path: &str, remote_name: &str) -> Result<GitPushResult, String> {
+    let vault = Path::new(vault_path);
+
+    let output = git_output(vault, &["push", remote_name])
+        .map_err(|e| format!("Failed to run git push: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = stderr_text(&output);
+        return Ok(classify_push_error(&stderr));
+    }
+
+    Ok(GitPushResult {
+        status: "ok".to_string(),
+        message: format!("Pushed to {}", remote_name),
+    })
+}
+
+/// List all configured remote names for a vault.
+pub fn git_list_remotes(vault_path: &str) -> Result<Vec<String>, String> {
+    let vault = Path::new(vault_path);
+    list_configured_remotes(vault)
 }
 
 #[cfg(test)]
@@ -623,6 +722,9 @@ hint: have locally."#;
             ahead: 2,
             behind: 1,
             has_remote: true,
+            remotes: vec![
+                RemoteInfo { name: "origin".to_string(), ahead: 2, behind: 1 },
+            ],
         };
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"hasRemote\""));

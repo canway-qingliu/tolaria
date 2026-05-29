@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import {
   Dialog,
@@ -33,28 +33,46 @@ function shouldCloseAfterResult(result: GitAddRemoteResult): boolean {
 async function submitRemoteConnection(
   vaultPath: string,
   remoteUrl: string,
+  remoteName?: string,
 ): Promise<GitAddRemoteResult> {
+  if (remoteName?.trim()) {
+    return tauriCall<GitAddRemoteResult>('git_add_remote_named', {
+      vaultPath,
+      remoteName: remoteName.trim(),
+      remoteUrl: remoteUrl.trim(),
+    })
+  }
   return tauriCall<GitAddRemoteResult>('git_add_remote', {
     request: {
       vaultPath,
-      remoteUrl,
+      remoteUrl: remoteUrl.trim(),
     },
   })
+}
+
+async function fetchConfiguredRemotes(vaultPath: string): Promise<string[]> {
+  return tauriCall<string[]>('git_list_remotes', { vaultPath })
+}
+
+async function removeRemote(vaultPath: string, remoteName: string): Promise<void> {
+  return tauriCall<void>('git_remove_remote', { vaultPath, remoteName })
 }
 
 async function getConnectErrorMessage({
   vaultPath,
   remoteUrl,
+  remoteName,
   onRemoteConnected,
   onClose,
 }: {
   vaultPath: string
   remoteUrl: string
+  remoteName?: string
   onRemoteConnected: (message: string) => void | Promise<void>
   onClose: () => void
 }): Promise<string | null> {
   try {
-    const result = await submitRemoteConnection(vaultPath, remoteUrl)
+    const result = await submitRemoteConnection(vaultPath, remoteUrl, remoteName)
 
     if (shouldCloseAfterResult(result)) {
       await onRemoteConnected(result.message)
@@ -75,12 +93,35 @@ export function AddRemoteModal({
   onRemoteConnected,
 }: AddRemoteModalProps) {
   const [remoteUrl, setRemoteUrl] = useState('')
+  const [remoteName, setRemoteName] = useState('')
   const [connectState, setConnectState] = useState<ConnectState>('idle')
   const [connectError, setConnectError] = useState<string | null>(null)
+  const [configuredRemotes, setConfiguredRemotes] = useState<string[]>([])
+  const [, setRemotesLoading] = useState(false)
+  const [removingRemote, setRemovingRemote] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
+
+  const loadRemotes = useCallback(async () => {
+    setRemotesLoading(true)
+    try {
+      const remotes = await fetchConfiguredRemotes(vaultPath)
+      setConfiguredRemotes(remotes)
+    } catch {
+      setConfiguredRemotes([])
+    } finally {
+      setRemotesLoading(false)
+    }
+  }, [vaultPath])
+
+  useEffect(() => {
+    if (open) {
+      void loadRemotes()
+    }
+  }, [open, loadRemotes])
 
   const resetState = useCallback(() => {
     setRemoteUrl('')
+    setRemoteName('')
     setConnectState('idle')
     setConnectError(null)
   }, [])
@@ -95,8 +136,14 @@ export function AddRemoteModal({
       handleClose()
     }
   }, [handleClose])
+
   const handleRemoteUrlChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
     setRemoteUrl(event.target.value)
+    setConnectError(null)
+  }, [])
+
+  const handleRemoteNameChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    setRemoteName(event.target.value)
     setConnectError(null)
   }, [])
 
@@ -112,6 +159,7 @@ export function AddRemoteModal({
     const errorMessage = await getConnectErrorMessage({
       vaultPath,
       remoteUrl: trimmedUrl,
+      remoteName: remoteName.trim(),
       onRemoteConnected,
       onClose: handleClose,
     })
@@ -121,7 +169,19 @@ export function AddRemoteModal({
     }
 
     setConnectState('idle')
-  }, [handleClose, onRemoteConnected, remoteUrl, vaultPath])
+  }, [handleClose, onRemoteConnected, remoteUrl, remoteName, vaultPath])
+
+  const handleRemoveRemote = useCallback(async (name: string) => {
+    setRemovingRemote(name)
+    try {
+      await removeRemote(vaultPath, name)
+      await loadRemotes()
+    } catch {
+      setConnectError(`Could not remove remote "${name}"`)
+    } finally {
+      setRemovingRemote(null)
+    }
+  }, [vaultPath, loadRemotes])
 
   const connectDisabled = connectState === 'connecting' || !remoteUrl.trim()
 
@@ -131,12 +191,49 @@ export function AddRemoteModal({
         <DialogHeader>
           <DialogTitle>Add Remote</DialogTitle>
           <DialogDescription>
-            Connect this local vault to a git remote. Your existing local commits stay intact; Tolaria
-            will only connect the vault when the remote history is safe to use.
+            Connect this local vault to one or more git remotes. Your existing local commits stay intact;
+            Tolaria will only connect the vault when the remote history is safe to use.
           </DialogDescription>
         </DialogHeader>
 
         <form className="flex flex-col gap-4 py-2" onSubmit={handleSubmit}>
+          {configuredRemotes.length > 0 && (
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-foreground">Configured Remotes</label>
+              <div className="flex flex-col gap-1">
+                {configuredRemotes.map((name) => (
+                  <div key={name} className="flex items-center justify-between rounded-sm border border-border px-2 py-1">
+                    <span className="text-xs font-medium text-foreground">{name}</span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      onClick={() => handleRemoveRemote(name)}
+                      disabled={removingRemote === name || connectState === 'connecting'}
+                      className="h-5 px-1 text-xs text-destructive hover:text-destructive"
+                    >
+                      {removingRemote === name ? 'Removing...' : 'Remove'}
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-foreground" htmlFor="add-remote-name">Remote Name (optional)</label>
+            <Input
+              id="add-remote-name"
+              placeholder="origin"
+              value={remoteName}
+              onChange={handleRemoteNameChange}
+              data-testid="add-remote-name"
+            />
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              Leave blank to use &ldquo;origin&rdquo; by default. Use a descriptive name for additional remotes (e.g., &ldquo;backup&rdquo;, &ldquo;mirror&rdquo;).
+            </p>
+          </div>
+
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium text-foreground" htmlFor="add-remote-url">Repository URL</label>
             <Input

@@ -644,6 +644,8 @@
   "status.remote.add": "Add a remote to this vault",
   "status.remote.none": "No remote",
   "status.remote.noneDescription": "This git vault has no remote configured. Commits stay local until you add one.",
+  "status.remote.configuredRemotes": "Configured Remotes",
+  "status.remote.remove": "Remove",
   "status.sync.syncing": "Syncing...",
   "status.sync.conflict": "Conflict",
   "status.sync.failed": "Sync failed",
